@@ -18,9 +18,15 @@ dotnet run --project WallpaperApp
 
 ## 操作
 
-- 啟動後自動載入美國 (US) 今日桌布
-- 點上方國旗列任一國家即切換為該國今日桌布
-- 已快取的國家會立即顯示, 未快取者會顯示載入動畫
+- 啟動後自動載入預設國家今日桌布. 預設國家為使用者於 Settings 設定的值, 若未設定則 fallback 至美國 (US).
+- 點上方國旗列任一國家即切換為該國今日桌布.
+- 已快取的國家會立即顯示, 未快取者會顯示載入動畫.
+
+## Top navbar 與 Settings
+
+- 主視窗最上方為 top navbar, 右側 gear 按鈕為 Settings 入口.
+- 點 gear 開啟 Settings 視窗 (modal). 第一個區段為 "Default country": 選擇要在下次啟動時自動載入的國家.
+- 選擇 default country 後設定立即持久化, 但 **不** 立刻切換目前顯示的桌布, 僅影響下次啟動.
 
 ## System tray (背景常駐)
 
@@ -33,7 +39,11 @@ dotnet run --project WallpaperApp
 ## 偏好與 Cache 位置
 
 - 桌布 cache: `%LOCALAPPDATA%\WallpaperApp\cache\<country_code>\`. 每國僅保留最新一張 jpg + 對應 metadata json.
-- 關閉偏好: `%LOCALAPPDATA%\WallpaperApp\preferences.json`. 內容格式 `{ "CloseAction": "MinimizeToTray" | "Exit" | null }`. 檔案損毀時視為無偏好 (不會 crash).
+- 使用者偏好: `%LOCALAPPDATA%\WallpaperApp\preferences.json`. JSON 欄位:
+  - `closeAction`: `"MinimizeToTray" | "Exit" | null` — 點主視窗 X 時的記憶行為.
+  - `defaultCountryCode`: 2 字母小寫國家代碼 (e.g. `"jp"`) 或 `null` — 啟動時要預設載入的國家.
+  - 反序列化為 case-insensitive, 舊版 PascalCase 欄位 (e.g. `"CloseAction"`) 仍可正常載入.
+- 檔案損毀或缺欄位視為偏好不存在 (不會 crash).
 
 ## 架構
 

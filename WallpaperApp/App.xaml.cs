@@ -29,7 +29,10 @@ public partial class App : Application
         _trayViewModel = new TrayIconViewModel(WindowClose, Preferences);
         _trayIcon = CreateTrayIcon(_trayViewModel);
 
-        var mainWindow = new MainWindow();
+        var mainWindow = new MainWindow
+        {
+            DataContext = new MainViewModel(new BingFetcher(), new WallpaperCache(), new FlagCache(), Preferences),
+        };
         MainWindow = mainWindow;
         mainWindow.Show();
     }

@@ -7,4 +7,5 @@ public interface IUserPreferencesService
     Task<UserPreferences> LoadAsync(CancellationToken ct = default);
     Task SaveAsync(UserPreferences preferences, CancellationToken ct = default);
     Task ResetCloseActionAsync(CancellationToken ct = default);
+    Task<bool> SetDefaultCountryAsync(string code, CancellationToken ct = default);
 }

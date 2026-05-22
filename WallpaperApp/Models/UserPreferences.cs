@@ -12,4 +12,6 @@ public enum CloseAction
 public sealed class UserPreferences
 {
     public CloseAction? CloseAction { get; set; }
+
+    public string? DefaultCountryCode { get; set; }
 }

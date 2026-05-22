@@ -1,21 +1,24 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Windows;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using WallpaperApp.Models;
 using WallpaperApp.Services;
+using WallpaperApp.Views;
 
 namespace WallpaperApp.ViewModels;
 
 public sealed partial class MainViewModel : ObservableObject
 {
-    private const string DefaultCountryCode = "us";
+    private const string FallbackCountryCode = "us";
 
     private readonly BingFetcher _fetcher;
     private readonly WallpaperCache _cache;
     private readonly FlagCache _flagCache;
+    private readonly IUserPreferencesService _preferences;
     private CancellationTokenSource? _activeCts;
 
     [ObservableProperty]
@@ -40,15 +43,16 @@ public sealed partial class MainViewModel : ObservableObject
     private string _windowTitle = "Bing Wallpaper";
 
     public MainViewModel()
-        : this(new BingFetcher(), new WallpaperCache(), new FlagCache())
+        : this(new BingFetcher(), new WallpaperCache(), new FlagCache(), new UserPreferencesService())
     {
     }
 
-    public MainViewModel(BingFetcher fetcher, WallpaperCache cache, FlagCache flagCache)
+    public MainViewModel(BingFetcher fetcher, WallpaperCache cache, FlagCache flagCache, IUserPreferencesService preferences)
     {
         _fetcher = fetcher;
         _cache = cache;
         _flagCache = flagCache;
+        _preferences = preferences;
     }
 
     public async Task InitializeAsync()
@@ -65,8 +69,14 @@ public sealed partial class MainViewModel : ObservableObject
                 _ = LoadFlagAsync(item);
             }
 
+            var prefs = await _preferences.LoadAsync().ConfigureAwait(true);
+            var preferred = prefs.DefaultCountryCode;
+
             var defaultItem =
-                items.FirstOrDefault(i => string.Equals(i.Code, DefaultCountryCode, StringComparison.OrdinalIgnoreCase))
+                (!string.IsNullOrEmpty(preferred)
+                    ? items.FirstOrDefault(i => string.Equals(i.Code, preferred, StringComparison.OrdinalIgnoreCase))
+                    : null)
+                ?? items.FirstOrDefault(i => string.Equals(i.Code, FallbackCountryCode, StringComparison.OrdinalIgnoreCase))
                 ?? items.FirstOrDefault();
 
             if (defaultItem is null)
@@ -99,6 +109,18 @@ public sealed partial class MainViewModel : ObservableObject
         {
             Debug.WriteLine($"[MainViewModel] LoadFlag failed for {item.Code}: {ex.Message}");
         }
+    }
+
+    [RelayCommand]
+    private void OpenSettings()
+    {
+        var vm = new SettingsViewModel(_preferences, Countries.ToList());
+        var window = new SettingsWindow
+        {
+            DataContext = vm,
+            Owner = Application.Current.MainWindow,
+        };
+        window.ShowDialog();
     }
 
     [RelayCommand]

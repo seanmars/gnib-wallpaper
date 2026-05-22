@@ -10,6 +10,8 @@ public sealed class UserPreferencesService : IUserPreferencesService
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
     };
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -45,6 +47,11 @@ public sealed class UserPreferencesService : IUserPreferencesService
 
     public async Task SaveAsync(UserPreferences preferences, CancellationToken ct = default)
     {
+        await TrySaveAsync(preferences, ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TrySaveAsync(UserPreferences preferences, CancellationToken ct)
+    {
         var path = GetPreferencesPath();
         var dir = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("Preferences path has no directory.");
 
@@ -65,10 +72,12 @@ public sealed class UserPreferencesService : IUserPreferencesService
             {
                 File.Move(tempPath, path);
             }
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Debug.WriteLine($"[UserPreferencesService] SaveAsync failed: {ex.Message}");
+            Debug.WriteLine($"[UserPreferencesService] TrySaveAsync failed: {ex.Message}");
+            return false;
         }
         finally
         {
@@ -81,5 +90,12 @@ public sealed class UserPreferencesService : IUserPreferencesService
         var prefs = await LoadAsync(ct).ConfigureAwait(false);
         prefs.CloseAction = null;
         await SaveAsync(prefs, ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> SetDefaultCountryAsync(string code, CancellationToken ct = default)
+    {
+        var prefs = await LoadAsync(ct).ConfigureAwait(false);
+        prefs.DefaultCountryCode = string.IsNullOrWhiteSpace(code) ? null : code.ToLowerInvariant();
+        return await TrySaveAsync(prefs, ct).ConfigureAwait(false);
     }
 }
