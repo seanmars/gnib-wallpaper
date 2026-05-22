@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Windows;
+using WallpaperApp.Services;
 using WallpaperApp.ViewModels;
 
 namespace WallpaperApp;
@@ -9,6 +11,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += OnLoadedAsync;
+        Closing += OnClosing;
+        StateChanged += OnStateChanged;
     }
 
     private async void OnLoadedAsync(object sender, RoutedEventArgs e)
@@ -18,5 +22,27 @@ public partial class MainWindow : Window
         {
             await vm.InitializeAsync();
         }
+    }
+
+    private async void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (App.CurrentApp.IsExiting)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        await App.CurrentApp.WindowClose.HandleCloseRequestAsync(CloseRequestReason.UserCloseButton);
+    }
+
+    private async void OnStateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState != WindowState.Minimized)
+        {
+            return;
+        }
+
+        WindowState = WindowState.Normal;
+        await App.CurrentApp.WindowClose.HandleCloseRequestAsync(CloseRequestReason.Minimize);
     }
 }
