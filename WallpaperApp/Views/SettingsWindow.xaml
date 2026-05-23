@@ -10,7 +10,8 @@
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
         Background="#1E1E1E"
-        Foreground="#EEEEEE">
+        Foreground="#EEEEEE"
+        Icon="pack://application:,,,/Assets/app.ico">
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>

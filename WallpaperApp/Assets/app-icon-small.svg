@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF8A4C"/>
+      <stop offset="0.45" stop-color="#D14A78"/>
+      <stop offset="1" stop-color="#3F1F7A"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect x="4" y="4" width="248" height="248" rx="48" ry="48"/>
+    </clipPath>
+  </defs>
+
+  <rect x="4" y="4" width="248" height="248" rx="48" ry="48" fill="url(#bg)"/>
+
+  <g clip-path="url(#frame)">
+    <!-- Bigger sun, no halo (halo disappears when downscaled) -->
+    <circle cx="178" cy="100" r="38" fill="#FFEFC2"/>
+
+    <!-- Single bold mountain silhouette -->
+    <path d="M 0 256 L 0 196 L 78 108 L 158 192 L 210 142 L 256 178 L 256 256 Z"
+          fill="#160929"/>
+  </g>
+</svg>

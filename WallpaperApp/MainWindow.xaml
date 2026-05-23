@@ -10,6 +10,7 @@
         Height="720" Width="1280"
         MinHeight="400" MinWidth="600"
         Background="#101010"
+        Icon="pack://application:,,,/Assets/app.ico"
         d:DataContext="{d:DesignInstance Type=vm:MainViewModel}">
 
     <DockPanel LastChildFill="True">

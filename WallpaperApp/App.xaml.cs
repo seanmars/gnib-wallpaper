@@ -54,7 +54,7 @@ public partial class App : Application
     {
         var icon = new TaskbarIcon
         {
-            IconSource = new BitmapImage(new Uri("pack://application:,,,/Assets/tray.ico", UriKind.Absolute)),
+            IconSource = new BitmapImage(new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute)),
             ToolTipText = "GNIB Wallpaper",
             DataContext = vm,
             DoubleClickCommand = vm.RestoreWindowCommand,
