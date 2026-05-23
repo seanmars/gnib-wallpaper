@@ -31,8 +31,7 @@ public sealed class FlagCache
 
     public string GetFlagsRoot()
     {
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(local, "WallpaperApp", "flags");
+        return HomeDir.GetPath("flags");
     }
 
     public async Task<BitmapImage?> GetFlagAsync(string code, CancellationToken ct = default)

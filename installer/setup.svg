@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <clipPath id="frame">
+      <rect x="14" y="14" width="228" height="228" rx="38" ry="38"/>
+    </clipPath>
+  </defs>
+
+  <!-- Outer rounded frame: white panel, black border -->
+  <rect x="14" y="14" width="228" height="228" rx="38" ry="38"
+        fill="#FFFFFF" stroke="#000000" stroke-width="10"/>
+
+  <g clip-path="url(#frame)">
+    <!-- Sun -->
+    <circle cx="180" cy="92" r="26"
+            fill="#FFFFFF" stroke="#000000" stroke-width="10"/>
+
+    <!-- Back mountain range (closed shape, drawn first) -->
+    <path d="M 0 215 L 50 155 L 92 185 L 138 130 L 188 170 L 230 145 L 256 165 L 256 256 L 0 256 Z"
+          fill="#FFFFFF" stroke="#000000" stroke-width="10"
+          stroke-linejoin="round" stroke-linecap="round"/>
+
+    <!-- Front mountain range (closed shape, overlaps back) -->
+    <path d="M 0 256 L 0 220 L 48 188 L 96 222 L 148 178 L 196 218 L 256 192 L 256 256 Z"
+          fill="#FFFFFF" stroke="#000000" stroke-width="10"
+          stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+</svg>

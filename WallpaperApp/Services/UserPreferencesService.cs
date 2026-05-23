@@ -21,8 +21,7 @@ public sealed class UserPreferencesService : IUserPreferencesService
 
     public string GetPreferencesPath()
     {
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(local, "WallpaperApp", "preferences.json");
+        return HomeDir.GetPath("preferences.json");
     }
 
     public async Task<UserPreferences> LoadAsync(CancellationToken ct = default)

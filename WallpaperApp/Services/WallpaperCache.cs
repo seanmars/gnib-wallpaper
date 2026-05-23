@@ -16,8 +16,7 @@ public sealed class WallpaperCache
 
     public string GetCacheRoot()
     {
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(local, "WallpaperApp", "cache");
+        return HomeDir.GetPath("cache");
     }
 
     public string GetCountryDir(string countryCode)
@@ -25,7 +24,8 @@ public sealed class WallpaperCache
         return Path.Combine(GetCacheRoot(), countryCode.ToLowerInvariant());
     }
 
-    public async Task<(byte[] ImageBytes, CachedMetadata Metadata)?> TryLoadTodayAsync(string countryCode, CancellationToken ct = default)
+    public async Task<(byte[] ImageBytes, CachedMetadata Metadata)?> TryLoadTodayAsync(string countryCode,
+        CancellationToken ct = default)
     {
         var dir = GetCountryDir(countryCode);
         if (!Directory.Exists(dir)) return null;
