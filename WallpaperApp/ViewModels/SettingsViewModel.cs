@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Windows.Media.Imaging;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+
 using WallpaperApp.Services;
 
 namespace WallpaperApp.ViewModels;
@@ -29,12 +31,22 @@ public sealed partial class SettingsViewModel : ObservableObject
     private const string FallbackCountryCode = "us";
 
     private readonly IUserPreferencesService _preferences;
+    private bool _suppressAutoRefreshWrites;
 
     [ObservableProperty]
     private ObservableCollection<SettingsCountryItem> _countries = new();
 
     [ObservableProperty]
     private SettingsCountryItem? _selectedDefault;
+
+    [ObservableProperty]
+    private bool _autoRefreshEnabled = true;
+
+    [ObservableProperty]
+    private int _autoRefreshIntervalMinutes = WallpaperApp.Models.UserPreferences.AutoRefreshIntervalDefault;
+
+    public int AutoRefreshIntervalMin => WallpaperApp.Models.UserPreferences.AutoRefreshIntervalMin;
+    public int AutoRefreshIntervalMax => WallpaperApp.Models.UserPreferences.AutoRefreshIntervalMax;
 
     public SettingsViewModel(IUserPreferencesService preferences, IReadOnlyList<CountryItem> countries)
     {
@@ -56,6 +68,60 @@ public sealed partial class SettingsViewModel : ObservableObject
             ?? Countries.FirstOrDefault();
 
         ApplySelection(match);
+
+        _suppressAutoRefreshWrites = true;
+        AutoRefreshEnabled = prefs.AutoRefreshEnabled;
+        AutoRefreshIntervalMinutes = Math.Clamp(
+            prefs.AutoRefreshIntervalMinutes,
+            AutoRefreshIntervalMin,
+            AutoRefreshIntervalMax);
+        _suppressAutoRefreshWrites = false;
+    }
+
+    partial void OnAutoRefreshEnabledChanged(bool value)
+    {
+        if (_suppressAutoRefreshWrites) return;
+        _ = PersistAutoRefreshEnabledAsync(value);
+    }
+
+    partial void OnAutoRefreshIntervalMinutesChanged(int oldValue, int newValue)
+    {
+        if (_suppressAutoRefreshWrites) return;
+
+        var clamped = Math.Clamp(newValue, AutoRefreshIntervalMin, AutoRefreshIntervalMax);
+        if (clamped != newValue)
+        {
+            _suppressAutoRefreshWrites = true;
+            AutoRefreshIntervalMinutes = clamped;
+            _suppressAutoRefreshWrites = false;
+            return;
+        }
+
+        _ = PersistAutoRefreshIntervalAsync(clamped);
+    }
+
+    private async Task PersistAutoRefreshEnabledAsync(bool enabled)
+    {
+        try
+        {
+            await _preferences.SetAutoRefreshEnabledAsync(enabled).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[SettingsViewModel] SetAutoRefreshEnabledAsync failed: {ex.Message}");
+        }
+    }
+
+    private async Task PersistAutoRefreshIntervalAsync(int minutes)
+    {
+        try
+        {
+            await _preferences.SetAutoRefreshIntervalMinutesAsync(minutes).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[SettingsViewModel] SetAutoRefreshIntervalMinutesAsync failed: {ex.Message}");
+        }
     }
 
     [RelayCommand]

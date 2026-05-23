@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+
 using WallpaperApp.Models;
 
 namespace WallpaperApp.Services;
@@ -15,6 +16,8 @@ public sealed class UserPreferencesService : IUserPreferencesService
     };
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    public event EventHandler<UserPreferences>? PreferencesChanged;
 
     public string GetPreferencesPath()
     {
@@ -32,7 +35,7 @@ public sealed class UserPreferencesService : IUserPreferencesService
         {
             var json = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
             var prefs = JsonSerializer.Deserialize<UserPreferences>(json, JsonOptions);
-            return prefs ?? new UserPreferences();
+            return NormalizeOnLoad(prefs ?? new UserPreferences());
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -45,9 +48,30 @@ public sealed class UserPreferencesService : IUserPreferencesService
         }
     }
 
+    private static UserPreferences NormalizeOnLoad(UserPreferences prefs)
+    {
+        prefs.AutoRefreshIntervalMinutes = Math.Clamp(
+            prefs.AutoRefreshIntervalMinutes,
+            UserPreferences.AutoRefreshIntervalMin,
+            UserPreferences.AutoRefreshIntervalMax);
+        return prefs;
+    }
+
     public async Task SaveAsync(UserPreferences preferences, CancellationToken ct = default)
     {
         await TrySaveAsync(preferences, ct).ConfigureAwait(false);
+    }
+
+    private void RaisePreferencesChanged(UserPreferences prefs)
+    {
+        try
+        {
+            PreferencesChanged?.Invoke(this, prefs);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[UserPreferencesService] PreferencesChanged subscriber threw: {ex.Message}");
+        }
     }
 
     private async Task<bool> TrySaveAsync(UserPreferences preferences, CancellationToken ct)
@@ -72,7 +96,6 @@ public sealed class UserPreferencesService : IUserPreferencesService
             {
                 File.Move(tempPath, path);
             }
-            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -83,6 +106,9 @@ public sealed class UserPreferencesService : IUserPreferencesService
         {
             _gate.Release();
         }
+
+        RaisePreferencesChanged(preferences);
+        return true;
     }
 
     public async Task ResetCloseActionAsync(CancellationToken ct = default)
@@ -96,6 +122,23 @@ public sealed class UserPreferencesService : IUserPreferencesService
     {
         var prefs = await LoadAsync(ct).ConfigureAwait(false);
         prefs.DefaultCountryCode = string.IsNullOrWhiteSpace(code) ? null : code.ToLowerInvariant();
+        return await TrySaveAsync(prefs, ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> SetAutoRefreshEnabledAsync(bool enabled, CancellationToken ct = default)
+    {
+        var prefs = await LoadAsync(ct).ConfigureAwait(false);
+        prefs.AutoRefreshEnabled = enabled;
+        return await TrySaveAsync(prefs, ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> SetAutoRefreshIntervalMinutesAsync(int minutes, CancellationToken ct = default)
+    {
+        var prefs = await LoadAsync(ct).ConfigureAwait(false);
+        prefs.AutoRefreshIntervalMinutes = Math.Clamp(
+            minutes,
+            UserPreferences.AutoRefreshIntervalMin,
+            UserPreferences.AutoRefreshIntervalMax);
         return await TrySaveAsync(prefs, ct).ConfigureAwait(false);
     }
 }

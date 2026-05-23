@@ -1,25 +1,35 @@
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Media.Imaging;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+
 using WallpaperApp.Models;
 using WallpaperApp.Services;
 using WallpaperApp.Views;
 
 namespace WallpaperApp.ViewModels;
 
-public sealed partial class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private const string FallbackCountryCode = "us";
+    private const int MaxConcurrentDownloads = 4;
 
     private readonly BingFetcher _fetcher;
     private readonly WallpaperCache _cache;
     private readonly FlagCache _flagCache;
     private readonly IUserPreferencesService _preferences;
-    private CancellationTokenSource? _activeCts;
+    private readonly IWallpaperSetterService _wallpaperSetter;
+    private readonly IWallpaperRefreshScheduler? _refreshScheduler;
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _inFlight =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _httpGate =
+        new(initialCount: MaxConcurrentDownloads, maxCount: MaxConcurrentDownloads);
 
     [ObservableProperty]
     private ObservableCollection<CountryItem> _countries = new();
@@ -43,17 +53,32 @@ public sealed partial class MainViewModel : ObservableObject
     private string _windowTitle = "Bing Wallpaper";
 
     public MainViewModel()
-        : this(new BingFetcher(), new WallpaperCache(), new FlagCache(), new UserPreferencesService())
+        : this(new BingFetcher(), new WallpaperCache(), new FlagCache(), new UserPreferencesService(), new WallpaperSetterService(), refreshScheduler: null)
     {
     }
 
-    public MainViewModel(BingFetcher fetcher, WallpaperCache cache, FlagCache flagCache, IUserPreferencesService preferences)
+    public MainViewModel(
+        BingFetcher fetcher,
+        WallpaperCache cache,
+        FlagCache flagCache,
+        IUserPreferencesService preferences,
+        IWallpaperSetterService wallpaperSetter,
+        IWallpaperRefreshScheduler? refreshScheduler)
     {
         _fetcher = fetcher;
         _cache = cache;
         _flagCache = flagCache;
         _preferences = preferences;
+        _wallpaperSetter = wallpaperSetter;
+        _refreshScheduler = refreshScheduler;
+
+        if (_refreshScheduler is not null)
+        {
+            _refreshScheduler.WallpaperRefreshed += OnWallpaperRefreshed;
+        }
     }
+
+    public IWallpaperRefreshScheduler? RefreshScheduler => _refreshScheduler;
 
     public async Task InitializeAsync()
     {
@@ -86,7 +111,12 @@ public sealed partial class MainViewModel : ObservableObject
                 return;
             }
 
-            await SelectCountryAsync(defaultItem).ConfigureAwait(true);
+            SelectCountry(defaultItem);
+
+            foreach (var item in items)
+            {
+                EnsureLoadStarted(item);
+            }
         }
         catch (Exception ex)
         {
@@ -112,6 +142,26 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void SetAsDesktop()
+    {
+        var path = SelectedCountry?.CachedImagePath;
+        if (string.IsNullOrEmpty(path)) return;
+
+        try
+        {
+            _wallpaperSetter.SetWallpaperFromFile(path);
+        }
+        catch (WallpaperSetterException ex)
+        {
+            MessageBox.Show(
+                $"Failed to set desktop wallpaper: {ex.Message}",
+                "Set Wallpaper",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    [RelayCommand]
     private void OpenSettings()
     {
         var vm = new SettingsViewModel(_preferences, Countries.ToList());
@@ -124,14 +174,9 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task SelectCountryAsync(CountryItem item)
+    private void SelectCountry(CountryItem item)
     {
         if (item is null) return;
-
-        _activeCts?.Cancel();
-        var cts = new CancellationTokenSource();
-        _activeCts = cts;
-        var ct = cts.Token;
 
         if (SelectedCountry is { } prev && !ReferenceEquals(prev, item))
         {
@@ -139,9 +184,89 @@ public sealed partial class MainViewModel : ObservableObject
         }
         item.IsSelected = true;
         SelectedCountry = item;
-        var country = item.Country;
+
+        if (item.LoadState == LoadState.Error)
+        {
+            EnsureLoadStarted(item);
+            return;
+        }
+
+        if (item.LoadState != LoadState.Loaded && !_inFlight.ContainsKey(item.Code))
+        {
+            EnsureLoadStarted(item);
+        }
+    }
+
+    partial void OnSelectedCountryChanged(CountryItem? oldValue, CountryItem? newValue)
+    {
+        if (oldValue is not null)
+        {
+            oldValue.PropertyChanged -= OnSelectedCountryPropertyChanged;
+        }
+
+        if (newValue is not null)
+        {
+            newValue.PropertyChanged += OnSelectedCountryPropertyChanged;
+            SyncStateFromSelected(newValue);
+        }
+        else
+        {
+            State = LoadState.Loading;
+            ErrorMessage = "";
+            CurrentImage = null;
+            CurrentWallpaper = null;
+            UpdateWindowTitle();
+        }
+    }
+
+    private void OnSelectedCountryPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not CountryItem item) return;
+        if (!ReferenceEquals(item, SelectedCountry)) return;
+
+        switch (e.PropertyName)
+        {
+            case nameof(CountryItem.LoadState):
+            case nameof(CountryItem.ErrorMessage):
+            case nameof(CountryItem.CachedImage):
+            case nameof(CountryItem.CachedWallpaper):
+                SyncStateFromSelected(item);
+                break;
+        }
+    }
+
+    private void SyncStateFromSelected(CountryItem item)
+    {
+        State = item.LoadState;
+        ErrorMessage = item.ErrorMessage;
+        CurrentImage = item.CachedImage;
+        CurrentWallpaper = item.CachedWallpaper;
         UpdateWindowTitle();
-        ErrorMessage = "";
+    }
+
+    private void EnsureLoadStarted(CountryItem item)
+    {
+        if (item.LoadState == LoadState.Loaded && item.CachedImage is not null) return;
+        if (_inFlight.ContainsKey(item.Code) && item.LoadState == LoadState.Loading) return;
+
+        var cts = new CancellationTokenSource();
+        if (!_inFlight.TryAdd(item.Code, cts))
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _ = LoadCountryAsync(item, cts);
+    }
+
+    private async Task LoadCountryAsync(CountryItem item, CancellationTokenSource cts)
+    {
+        var ct = cts.Token;
+        item.LoadState = LoadState.Loading;
+        item.ErrorMessage = "";
+
+        var country = item.Country;
+        var gateTaken = false;
 
         try
         {
@@ -149,18 +274,19 @@ public sealed partial class MainViewModel : ObservableObject
             if (cached is not null)
             {
                 if (ct.IsCancellationRequested) return;
-                ApplyCached(country, cached.Value.ImageBytes, cached.Value.Metadata);
+                ApplyResultToItem(item, country, cached.Value.ImageBytes, cached.Value.Metadata);
                 return;
             }
 
-            State = LoadState.Loading;
+            await _httpGate.WaitAsync(ct).ConfigureAwait(true);
+            gateTaken = true;
 
             var link = await _fetcher.GetTodayDetailLinkAsync(country, ct).ConfigureAwait(true);
             if (link is null)
             {
                 if (ct.IsCancellationRequested) return;
-                State = LoadState.Error;
-                ErrorMessage = $"No wallpaper found for {country.Name} today.";
+                item.LoadState = LoadState.Error;
+                item.ErrorMessage = $"No wallpaper found for {country.Name} today.";
                 return;
             }
 
@@ -169,54 +295,64 @@ public sealed partial class MainViewModel : ObservableObject
             if (resolution is null || !wallpaper.DownloadUrls.TryGetValue(resolution, out var url) || string.IsNullOrEmpty(url))
             {
                 if (ct.IsCancellationRequested) return;
-                State = LoadState.Error;
-                ErrorMessage = $"No downloadable URL for {country.Name}.";
+                item.LoadState = LoadState.Error;
+                item.ErrorMessage = $"No downloadable URL for {country.Name}.";
                 return;
             }
 
             var bytes = await _fetcher.DownloadImageBytesAsync(url, ct).ConfigureAwait(true);
             if (ct.IsCancellationRequested) return;
 
-            await _cache.SaveAsync(wallpaper, bytes, resolution, ct).ConfigureAwait(true);
+            var saved = await _cache.SaveAsync(wallpaper, bytes, resolution, ct).ConfigureAwait(true);
             if (ct.IsCancellationRequested) return;
 
-            CurrentWallpaper = wallpaper;
-            CurrentImage = LoadBitmap(bytes);
-            State = LoadState.Loaded;
-            UpdateWindowTitle();
+            ApplyDownloadedToItem(item, wallpaper, bytes, saved?.ImagePath);
         }
         catch (OperationCanceledException)
         {
-            // user switched country, ignore
+            // ct is per-country; cancellation means an explicit reset — stay silent.
         }
         catch (Exception ex)
         {
             if (ct.IsCancellationRequested) return;
-            State = LoadState.Error;
-            ErrorMessage = $"Failed to load wallpaper for {country.Name}: {ex.Message}";
+            item.LoadState = LoadState.Error;
+            item.ErrorMessage = $"Failed to load wallpaper for {country.Name}: {ex.Message}";
         }
         finally
         {
-            if (ReferenceEquals(_activeCts, cts))
+            if (gateTaken)
             {
-                _activeCts = null;
+                _httpGate.Release();
             }
-            cts.Dispose();
+            if (_inFlight.TryGetValue(item.Code, out var current) && ReferenceEquals(current, cts))
+            {
+                _inFlight.TryRemove(item.Code, out _);
+                cts.Dispose();
+            }
         }
     }
 
-    private void ApplyCached(Country country, byte[] imageBytes, CachedMetadata metadata)
+    private static void ApplyResultToItem(CountryItem item, Country country, byte[] imageBytes, CachedMetadata metadata)
     {
-        CurrentWallpaper = new Wallpaper(
+        var wallpaper = new Wallpaper(
             country,
             metadata.Slug,
             metadata.Title,
             metadata.Copyright,
             metadata.DetailUrl,
             metadata.DownloadUrls);
-        CurrentImage = LoadBitmap(imageBytes);
-        State = LoadState.Loaded;
-        UpdateWindowTitle();
+        item.CachedWallpaper = wallpaper;
+        item.CachedImage = LoadBitmap(imageBytes);
+        item.CachedImagePath = metadata.ImagePath;
+        item.LoadState = LoadState.Loaded;
+    }
+
+    private static void ApplyDownloadedToItem(CountryItem item, Wallpaper wallpaper, byte[] bytes, string? imagePath)
+    {
+        item.CachedWallpaper = wallpaper;
+        item.CachedImage = LoadBitmap(bytes);
+        item.CachedImagePath = imagePath;
+        item.LoadState = LoadState.Loaded;
     }
 
     private void UpdateWindowTitle()
@@ -237,5 +373,41 @@ public sealed partial class MainViewModel : ObservableObject
         bmp.EndInit();
         bmp.Freeze();
         return bmp;
+    }
+
+    private void OnWallpaperRefreshed(object? sender, WallpaperRefreshedEventArgs e)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+
+        if (dispatcher.CheckAccess())
+        {
+            ApplyRefresh(e);
+        }
+        else
+        {
+            dispatcher.BeginInvoke(new Action(() => ApplyRefresh(e)));
+        }
+    }
+
+    private void ApplyRefresh(WallpaperRefreshedEventArgs e)
+    {
+        var item = Countries.FirstOrDefault(c =>
+            string.Equals(c.Code, e.CountryCode, StringComparison.OrdinalIgnoreCase));
+        if (item is null) return;
+
+        item.CachedWallpaper = e.Wallpaper;
+        item.CachedImage = LoadBitmap(e.ImageBytes);
+        item.CachedImagePath = e.ImagePath;
+        item.LoadState = LoadState.Loaded;
+        item.ErrorMessage = "";
+    }
+
+    public void Dispose()
+    {
+        if (_refreshScheduler is not null)
+        {
+            _refreshScheduler.WallpaperRefreshed -= OnWallpaperRefreshed;
+        }
     }
 }

@@ -1,7 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
+
 using Hardcodet.Wpf.TaskbarNotification;
+
 using WallpaperApp.Services;
 using WallpaperApp.ViewModels;
 
@@ -11,12 +13,15 @@ public partial class App : Application
 {
     private TaskbarIcon? _trayIcon;
     private TrayIconViewModel? _trayViewModel;
+    private IWallpaperRefreshScheduler? _refreshScheduler;
 
     public bool IsExiting { get; private set; }
 
     public IUserPreferencesService Preferences { get; private set; } = default!;
 
     public IWindowCloseService WindowClose { get; private set; } = default!;
+
+    public IWallpaperSetterService WallpaperSetter { get; private set; } = default!;
 
     public static App CurrentApp => (App)Current;
 
@@ -26,22 +31,47 @@ public partial class App : Application
 
         Preferences = new UserPreferencesService();
         WindowClose = new WindowCloseService(Preferences, RequestShutdown);
+        WallpaperSetter = new WallpaperSetterService();
         _trayViewModel = new TrayIconViewModel(WindowClose, Preferences);
         _trayIcon = CreateTrayIcon(_trayViewModel);
 
+        var fetcher = new BingFetcher();
+        var cache = new WallpaperCache();
+        _refreshScheduler = new WallpaperRefreshScheduler(fetcher, cache, Preferences);
+
         var mainWindow = new MainWindow
         {
-            DataContext = new MainViewModel(new BingFetcher(), new WallpaperCache(), new FlagCache(), Preferences),
+            DataContext = new MainViewModel(fetcher, cache, new FlagCache(), Preferences, WallpaperSetter, _refreshScheduler),
         };
         MainWindow = mainWindow;
         mainWindow.Show();
+
+        StartRefreshSchedulerIfEnabled();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _refreshScheduler?.Dispose();
+        _refreshScheduler = null;
         _trayIcon?.Dispose();
         _trayIcon = null;
         base.OnExit(e);
+    }
+
+    private async void StartRefreshSchedulerIfEnabled()
+    {
+        try
+        {
+            var prefs = await Preferences.LoadAsync().ConfigureAwait(true);
+            if (prefs.AutoRefreshEnabled)
+            {
+                _refreshScheduler?.Start();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[App] StartRefreshSchedulerIfEnabled failed: {ex.Message}");
+        }
     }
 
     private void RequestShutdown()

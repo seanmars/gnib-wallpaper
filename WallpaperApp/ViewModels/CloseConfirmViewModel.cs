@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+
 using WallpaperApp.Models;
 
 namespace WallpaperApp.ViewModels;

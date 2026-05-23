@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+
 using WallpaperApp.Services;
 using WallpaperApp.ViewModels;
 
@@ -12,7 +13,16 @@ public partial class MainWindow : Window
         InitializeComponent();
         Loaded += OnLoadedAsync;
         Closing += OnClosing;
+        Closed += OnClosed;
         StateChanged += OnStateChanged;
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        if (DataContext is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
     }
 
     private async void OnLoadedAsync(object sender, RoutedEventArgs e)

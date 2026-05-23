@@ -1,8 +1,9 @@
 using System.Net.Http;
-using AngleSharp;
+
 using AngleSharp.Dom;
 using AngleSharp.Html.Dom;
 using AngleSharp.Html.Parser;
+
 using WallpaperApp.Models;
 
 namespace WallpaperApp.Services;
@@ -14,7 +15,13 @@ public sealed class BingFetcher
 
     private static readonly HashSet<string> NonCountryPaths = new(StringComparer.OrdinalIgnoreCase)
     {
-        "archive", "detail", "about", "api", "search", "tag", "category",
+        "archive",
+        "detail",
+        "about",
+        "api",
+        "search",
+        "tag",
+        "category",
     };
 
     private static readonly HttpClient Http = CreateHttpClient();
@@ -22,41 +29,27 @@ public sealed class BingFetcher
 
     private static HttpClient CreateHttpClient()
     {
-        var http = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(30),
-        };
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30), };
         http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         return http;
     }
 
     public async Task<IReadOnlyList<Country>> DiscoverCountriesAsync(CancellationToken ct = default)
     {
-        var html = await GetStringAsync(BaseUrl, ct).ConfigureAwait(false);
-        var document = await Parser.ParseDocumentAsync(html, ct).ConfigureAwait(false);
-
-        var found = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var anchor in document.QuerySelectorAll("a[href]").OfType<IHtmlAnchorElement>())
+        return new List<Country>()
         {
-            var href = anchor.GetAttribute("href")?.Trim();
-            if (string.IsNullOrEmpty(href) || !href.StartsWith("/", StringComparison.Ordinal)) continue;
-
-            var path = href.TrimStart('/').TrimEnd('/');
-            if (path.Length != 2) continue;
-            if (NonCountryPaths.Contains(path)) continue;
-            if (!path.All(char.IsLetter)) continue;
-
-            var code = path.ToLowerInvariant();
-            var name = (anchor.TextContent ?? "").Trim();
-            if (string.IsNullOrEmpty(name)) name = code.ToUpperInvariant();
-
-            if (!found.ContainsKey(code))
-            {
-                found[code] = name;
-            }
-        }
-
-        return found.Select(kv => new Country(kv.Key, kv.Value)).ToList();
+            new("au", "Australia"),
+            new("ca", "Canada"),
+            new("cn", "China"),
+            new("de", "Germany"),
+            new("es", "España"),
+            new("fr", "France"),
+            new("it", "Italy"),
+            new("jp", "Japan"),
+            new("nz", "New Zealand"),
+            new("uk", "United Kingdom"),
+            new("us", "United States"),
+        };
     }
 
     public async Task<DetailLink?> GetTodayDetailLinkAsync(Country country, CancellationToken ct = default)
@@ -112,6 +105,7 @@ public sealed class BingFetcher
                 return res;
             }
         }
+
         return null;
     }
 
@@ -119,7 +113,8 @@ public sealed class BingFetcher
     {
         try
         {
-            using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
         }
@@ -142,6 +137,7 @@ public sealed class BingFetcher
             {
                 throw new FetcherException($"HTTP {(int)response.StatusCode} for {url}");
             }
+
             return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -196,6 +192,7 @@ public sealed class BingFetcher
                     return (title, inside);
                 }
             }
+
             if (!string.IsNullOrWhiteSpace(alt))
             {
                 return (alt.Trim(), "");

@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+
 using WallpaperApp.ViewModels;
 
 namespace WallpaperApp.Views;
@@ -28,6 +29,18 @@ public partial class SettingsWindow : Window
         {
             Close();
             e.Handled = true;
+        }
+    }
+
+    private void OnIntervalPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        foreach (var ch in e.Text)
+        {
+            if (!char.IsDigit(ch))
+            {
+                e.Handled = true;
+                return;
+            }
         }
     }
 }
