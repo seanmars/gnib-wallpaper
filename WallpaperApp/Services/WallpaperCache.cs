@@ -27,6 +27,24 @@ public sealed class WallpaperCache
     public async Task<(byte[] ImageBytes, CachedMetadata Metadata)?> TryLoadTodayAsync(string countryCode,
         CancellationToken ct = default)
     {
+        var loaded = await TryLoadLatestAsync(countryCode, ct).ConfigureAwait(false);
+        if (loaded is null) return null;
+
+        var todayUtc = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        return string.Equals(loaded.Value.Metadata.Date, todayUtc, StringComparison.Ordinal)
+            ? loaded
+            : null;
+    }
+
+    /// <summary>
+    /// Loads the country's most recent cached image regardless of when it was downloaded.
+    /// Unlike <see cref="TryLoadTodayAsync"/>, this does not filter on the download date, so
+    /// it returns the current cached wallpaper even when the slug gate skipped re-saving on a
+    /// later day. Used by the desktop reconcile, which must reflect the current image.
+    /// </summary>
+    public async Task<(byte[] ImageBytes, CachedMetadata Metadata)?> TryLoadLatestAsync(string countryCode,
+        CancellationToken ct = default)
+    {
         var dir = GetCountryDir(countryCode);
         if (!Directory.Exists(dir)) return null;
 
@@ -39,12 +57,6 @@ public sealed class WallpaperCache
             var metadata = JsonSerializer.Deserialize<CachedMetadata>(jsonText, JsonOptions);
             if (metadata is null) return null;
 
-            var todayUtc = DateTime.UtcNow.ToString("yyyy-MM-dd");
-            if (!string.Equals(metadata.Date, todayUtc, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
             if (!File.Exists(metadata.ImagePath)) return null;
 
             var imageBytes = await File.ReadAllBytesAsync(metadata.ImagePath, ct).ConfigureAwait(false);
@@ -52,7 +64,7 @@ public sealed class WallpaperCache
         }
         catch (Exception ex) when (ex is IOException or JsonException)
         {
-            Debug.WriteLine($"[WallpaperCache] TryLoadTodayAsync failed for {countryCode}: {ex.Message}");
+            Debug.WriteLine($"[WallpaperCache] TryLoadLatestAsync failed for {countryCode}: {ex.Message}");
             return null;
         }
     }

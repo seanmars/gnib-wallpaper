@@ -17,6 +17,8 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
     private readonly BingFetcher _fetcher;
     private readonly WallpaperCache _cache;
     private readonly IUserPreferencesService _preferences;
+    private readonly IWallpaperSetterService _wallpaperSetter;
+    private readonly DesktopStateStore _desktopState;
     private readonly SemaphoreSlim _refreshGate =
         new(initialCount: MaxConcurrentRefresh, maxCount: MaxConcurrentRefresh);
     private readonly object _stateLock = new();
@@ -33,11 +35,15 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
     public WallpaperRefreshScheduler(
         BingFetcher fetcher,
         WallpaperCache cache,
-        IUserPreferencesService preferences)
+        IUserPreferencesService preferences,
+        IWallpaperSetterService wallpaperSetter,
+        DesktopStateStore desktopState)
     {
         _fetcher = fetcher;
         _cache = cache;
         _preferences = preferences;
+        _wallpaperSetter = wallpaperSetter;
+        _desktopState = desktopState;
         _preferences.PreferencesChanged += OnPreferencesChanged;
     }
 
@@ -87,10 +93,19 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
     {
         ThrowIfDisposed();
 
-        var resolved = await ResolveCountriesAsync(countryCodes, ct).ConfigureAwait(false);
+        var allCountries = await TryDiscoverCountriesAsync(ct).ConfigureAwait(false);
+        if (allCountries.Count == 0) return;
+
+        var codes = await ResolveCountryCodesAsync(countryCodes, ct).ConfigureAwait(false);
+        var resolved = MapCodesToCountries(codes, allCountries);
         if (resolved.Count == 0) return;
 
-        var tasks = resolved.Select(code => RefreshOneAsync(code, ct)).ToArray();
+        await RefreshManyAsync(resolved, ct).ConfigureAwait(false);
+    }
+
+    private async Task RefreshManyAsync(IReadOnlyList<Country> countries, CancellationToken ct)
+    {
+        var tasks = countries.Select(country => RefreshOneAsync(country, ct)).ToArray();
         try
         {
             await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -101,7 +116,36 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
         }
     }
 
-    private async Task<List<string>> ResolveCountriesAsync(IReadOnlyList<string>? requested, CancellationToken ct)
+    private async Task<IReadOnlyList<Country>> TryDiscoverCountriesAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _fetcher.DiscoverCountriesAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WallpaperRefreshScheduler] DiscoverCountriesAsync failed: {ex.Message}");
+            return Array.Empty<Country>();
+        }
+    }
+
+    private static List<Country> MapCodesToCountries(IReadOnlyList<string> codes, IReadOnlyList<Country> allCountries)
+    {
+        var resolved = new List<Country>(codes.Count);
+        foreach (var code in codes)
+        {
+            var country = allCountries.FirstOrDefault(c => string.Equals(c.Code, code, StringComparison.OrdinalIgnoreCase));
+            if (country is null)
+            {
+                Debug.WriteLine($"[WallpaperRefreshScheduler] Country '{code}' not in DiscoverCountriesAsync result; skipping.");
+                continue;
+            }
+            resolved.Add(country);
+        }
+        return resolved;
+    }
+
+    private async Task<List<string>> ResolveCountryCodesAsync(IReadOnlyList<string>? requested, CancellationToken ct)
     {
         if (requested is { Count: > 0 })
         {
@@ -123,23 +167,13 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
             return filtered;
         }
 
-        var prefs = await _preferences.LoadAsync(ct).ConfigureAwait(false);
-        var fallback = !string.IsNullOrWhiteSpace(prefs.DefaultCountryCode)
-            ? prefs.DefaultCountryCode!.ToLowerInvariant()
-            : FallbackCountryCode;
-        return CountryCodePattern.IsMatch(fallback)
-            ? new List<string> { fallback }
-            : new List<string> { FallbackCountryCode };
+        var fallback = await ResolveDefaultCountryCodeAsync(ct).ConfigureAwait(false);
+        return new List<string> { fallback };
     }
 
-    private async Task RefreshOneAsync(string countryCode, CancellationToken ct)
+    private async Task RefreshOneAsync(Country country, CancellationToken ct)
     {
-        var country = await ResolveCountryAsync(countryCode, ct).ConfigureAwait(false);
-        if (country is null)
-        {
-            Debug.WriteLine($"[WallpaperRefreshScheduler] Country '{countryCode}' not in DiscoverCountriesAsync result; skipping.");
-            return;
-        }
+        var countryCode = country.Code;
 
         try
         {
@@ -192,20 +226,6 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
         finally
         {
             try { _refreshGate.Release(); } catch (ObjectDisposedException) { }
-        }
-    }
-
-    private async Task<Country?> ResolveCountryAsync(string countryCode, CancellationToken ct)
-    {
-        try
-        {
-            var countries = await _fetcher.DiscoverCountriesAsync(ct).ConfigureAwait(false);
-            return countries.FirstOrDefault(c => string.Equals(c.Code, countryCode, StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[WallpaperRefreshScheduler] DiscoverCountriesAsync failed: {ex.Message}");
-            return null;
         }
     }
 
@@ -269,7 +289,7 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
             {
                 try
                 {
-                    await RefreshAsync(null, ct).ConfigureAwait(false);
+                    await RunTickAsync(ct).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -285,6 +305,77 @@ public sealed class WallpaperRefreshScheduler : IWallpaperRefreshScheduler
         {
             Debug.WriteLine($"[WallpaperRefreshScheduler] Loop terminated unexpectedly: {ex.Message}");
         }
+    }
+
+    private async Task RunTickAsync(CancellationToken ct)
+    {
+        // Step 1: refresh every country's cache (slug-gated; only changed countries download).
+        var allCountries = await TryDiscoverCountriesAsync(ct).ConfigureAwait(false);
+        if (allCountries.Count > 0)
+        {
+            await RefreshManyAsync(allCountries, ct).ConfigureAwait(false);
+        }
+
+        // Step 2: reconcile the desktop against the default country (hash-gated, independent of
+        // whether that country's slug changed this tick).
+        await ReconcileDesktopAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task ReconcileDesktopAsync(CancellationToken ct)
+    {
+        try
+        {
+            var code = await ResolveDefaultCountryCodeAsync(ct).ConfigureAwait(false);
+
+            var loaded = await _cache.TryLoadLatestAsync(code, ct).ConfigureAwait(false);
+            if (loaded is null)
+            {
+                Debug.WriteLine($"[WallpaperRefreshScheduler] Desktop reconcile: no cached image for '{code}'; skipping.");
+                return;
+            }
+
+            var (imageBytes, metadata) = loaded.Value;
+            var hash = ImageHash.Compute(imageBytes);
+
+            var state = await _desktopState.LoadAsync(ct).ConfigureAwait(false);
+            if (string.Equals(state.AppliedImageHash, hash, StringComparison.Ordinal))
+            {
+                // Unchanged since last applied; leave the desktop untouched.
+                return;
+            }
+
+            try
+            {
+                _wallpaperSetter.SetWallpaperFromFile(metadata.ImagePath);
+            }
+            catch (WallpaperSetterException ex)
+            {
+                // Do not record the new hash, so the next tick retries.
+                Debug.WriteLine($"[WallpaperRefreshScheduler] Desktop apply failed for '{code}': {ex.Message}");
+                return;
+            }
+
+            await _desktopState
+                .SaveAsync(new DesktopState { AppliedImageHash = hash, AppliedCountryCode = code }, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stop() / Dispose() was called.
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WallpaperRefreshScheduler] Desktop reconcile failed: {ex.Message}");
+        }
+    }
+
+    private async Task<string> ResolveDefaultCountryCodeAsync(CancellationToken ct)
+    {
+        var prefs = await _preferences.LoadAsync(ct).ConfigureAwait(false);
+        var code = !string.IsNullOrWhiteSpace(prefs.DefaultCountryCode)
+            ? prefs.DefaultCountryCode!.ToLowerInvariant()
+            : FallbackCountryCode;
+        return CountryCodePattern.IsMatch(code) ? code : FallbackCountryCode;
     }
 
     private void OnPreferencesChanged(object? sender, UserPreferences prefs)

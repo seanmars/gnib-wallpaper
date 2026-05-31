@@ -37,7 +37,8 @@ public partial class App : Application
 
         var fetcher = new BingFetcher();
         var cache = new WallpaperCache();
-        _refreshScheduler = new WallpaperRefreshScheduler(fetcher, cache, Preferences);
+        var desktopState = new DesktopStateStore();
+        _refreshScheduler = new WallpaperRefreshScheduler(fetcher, cache, Preferences, WallpaperSetter, desktopState);
 
         var mainWindow = new MainWindow
         {
